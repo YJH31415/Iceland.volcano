@@ -29,13 +29,27 @@ export default function Simulator({mode,onHome}:{mode:Mode;onHome:()=>void}){
   const setParam=<K extends keyof Params>(key:K,value:Params[K])=>setParams(p=>({...p,[key]:value}));
   const reset=()=>{if(timer.current)clearInterval(timer.current);grid.current.reset();setTime(new Date("2010-04-14T00:00:00Z"));setStatus("idle");setSnapshots([]);setMetrics(null);setData({type:"FeatureCollection",features:[]});lastRecord.current=0;setError("");};
   const tick=useCallback(()=>{
-    const dt=1800*speed; const nextTime=new Date(timeRef.current.getTime()+dt*1000);timeRef.current=nextTime;
-    grid.current.step(params,dt,neutralWind);
-    const iso=nextTime.toISOString();setTime(nextTime);setMetrics(grid.current.snapshot(iso));setData(grid.current.toGeoJSON());
-    const elapsed=(nextTime.getTime()-new Date("2010-04-14T00:00:00Z").getTime())/1000;
-    if(elapsed-lastRecord.current>=1800){const s=grid.current.snapshot(iso);setSnapshots(prev=>[...prev,s]);lastRecord.current=elapsed;}
+    // Advance in exact 30-minute solver increments. Higher playback speeds execute
+    // multiple physical steps per UI tick so no required statistics timestamps are skipped.
+    const records:Snapshot[]=[];
+    let nextTime=timeRef.current;
+    for(let i=0;i<speed;i++){
+      const candidate=new Date(nextTime.getTime()+1800*1000);
+      const end=new Date(params.end);
+      if(candidate>end){nextTime=end;break;}
+      grid.current.step(params,1800,neutralWind);
+      nextTime=candidate;
+      const elapsed=(nextTime.getTime()-new Date("2010-04-14T00:00:00Z").getTime())/1000;
+      if(elapsed>=lastRecord.current+1800){
+        records.push(grid.current.snapshot(nextTime.toISOString()));
+        lastRecord.current=elapsed;
+      }
+    }
+    timeRef.current=nextTime;
+    setTime(nextTime);setMetrics(grid.current.snapshot(nextTime.toISOString()));setData(grid.current.toGeoJSON());
+    if(records.length)setSnapshots(prev=>[...prev,...records]);
     if(nextTime>=new Date(params.end)){setStatus("complete");if(timer.current)clearInterval(timer.current);}
-  },[params]);
+  },[params,speed]);
   const timeRef=useRef(time); useEffect(()=>{timeRef.current=time;},[time]);
   useEffect(()=>{if(status==="running"){timer.current=setInterval(tick,500);return()=>{if(timer.current)clearInterval(timer.current);};}return()=>{if(timer.current)clearInterval(timer.current);};},[status,tick]);
   const start=async()=>{
